@@ -1,0 +1,4 @@
+/.venv/
+/src/fer2013.csv
+/src/model.h5
+/src/data/

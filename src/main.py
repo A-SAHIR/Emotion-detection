@@ -2,12 +2,13 @@ import numpy as np
 import argparse
 import matplotlib.pyplot as plt
 import cv2
-from sklearn.metrics import precision_score, confusion_matrix
-import seaborn as sns
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense, Dropout, Flatten, Conv2D, MaxPooling2D
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from sklearn.metrics import precision_score, confusion_matrix, roc_curve, auc
+from sklearn.preprocessing import label_binarize
+import seaborn as sns
 import os
 
 # Suppress TensorFlow warnings
@@ -15,10 +16,10 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 # Command line argument
 ap = argparse.ArgumentParser()
-ap.add_argument("--mode", help="train/display/generate_metrics")
+ap.add_argument("--mode", help="train/display/generate_metrics/roc_auc")
 mode = ap.parse_args().mode
 
-# Dictionary mapping labels to emotions
+# Emotion dictionary
 emotion_dict = {0: "Angry", 1: "Disgust", 2: "Fear", 3: "Happy", 4: "Neutral", 5: "Sad", 6: "Surpris"}
 
 # Create the model
@@ -35,7 +36,7 @@ model.add(Dropout(0.25))
 model.add(Flatten())
 model.add(Dense(1024, activation='relu'))
 model.add(Dropout(0.5))
-model.add(Dense(7, activation='softmax'))
+model.add(Dense(7, activation='softmax'))  # 7 classes for emotions
 
 # If mode is "train", train the model
 if mode == "train":
@@ -64,7 +65,10 @@ if mode == "train":
         color_mode="grayscale",
         class_mode='categorical')
 
+    # Compile the model
     model.compile(loss='categorical_crossentropy', optimizer=Adam(learning_rate=0.0001, epsilon=1e-6), metrics=['accuracy'])
+    
+    # Train the model and store the training history
     model_info = model.fit(
         train_generator,
         steps_per_epoch=num_train // batch_size,
@@ -73,6 +77,42 @@ if mode == "train":
         validation_steps=num_val // batch_size)
     
     model.save_weights('model.h5')
+
+    # Plot Accuracy and Loss Curves
+    def plot_model_history(history):
+        """
+        Plot training & validation accuracy and loss values
+        """
+        # Create a figure for accuracy and loss plots
+        plt.figure(figsize=(12, 4))
+        
+        # Plot accuracy
+        plt.subplot(1, 2, 1)
+        plt.plot(history.history['accuracy'], label='Train Accuracy', color='blue')
+        plt.plot(history.history['val_accuracy'], label='Validation Accuracy', color='green')
+        plt.title('Model Accuracy for All Emotions')
+        plt.xlabel('Epoch')
+        plt.ylabel('Accuracy')
+        plt.legend(loc='lower right')
+        plt.grid(True)
+
+        # Plot loss
+        plt.subplot(1, 2, 2)
+        plt.plot(history.history['loss'], label='Train Loss', color='red')
+        plt.plot(history.history['val_loss'], label='Validation Loss', color='orange')
+        plt.title('Model Loss for All Emotions')
+        plt.xlabel('Epoch')
+        plt.ylabel('Loss')
+        plt.legend(loc='upper right')
+        plt.grid(True)
+
+        # Adjust layout and save the plot
+        plt.tight_layout()
+        plt.savefig('accuracy_loss_curves_all_emotions.png')
+        plt.show()
+
+    # Call the function to plot accuracy and loss
+    plot_model_history(model_info)
 
 # If mode is "display", display the emotions on webcam
 elif mode == "display":
@@ -153,3 +193,55 @@ elif mode == "generate_metrics":
     # Print the precision for each class
     for label, precision in zip(emotion_labels, class_precision):
         print(f"{label}: {precision:.4f}")
+
+# New mode to generate ROC curves and AUC for each class
+elif mode == "roc_auc":
+    model.load_weights('model.h5')
+    
+    # Load the validation dataset
+    val_dir = 'data/test'
+    val_datagen = ImageDataGenerator(rescale=1./255)
+    validation_generator = val_datagen.flow_from_directory(
+        val_dir,
+        target_size=(48, 48),
+        batch_size=64,
+        color_mode="grayscale",
+        class_mode='categorical',
+        shuffle=False)
+    
+    # Get true labels and predicted probabilities
+    y_true = validation_generator.classes
+    y_score = model.predict(validation_generator, steps=validation_generator.samples // validation_generator.batch_size + 1)
+    
+    # Binarize the labels for multi-class ROC computation
+    y_true_bin = label_binarize(y_true, classes=[0, 1, 2, 3, 4, 5, 6])
+    n_classes = 7  # Number of classes
+
+    fpr = dict()
+    tpr = dict()
+    roc_auc = dict()
+
+    # Compute ROC curve and ROC area for each class
+    for i in range(n_classes):
+        fpr[i], tpr[i], _ = roc_curve(y_true_bin[:, i], y_score[:, i])
+        roc_auc[i] = auc(fpr[i], tpr[i])
+
+    # Plot ROC curve for each class
+    plt.figure(figsize=(10, 8))
+    colors = ['aqua', 'darkorange', 'cornflowerblue', 'green', 'red', 'purple', 'brown']
+    for i, color in zip(range(n_classes), colors):
+        plt.plot(fpr[i], tpr[i], color=color, lw=2, label=f'ROC curve of {emotion_dict[i]} (AUC = {roc_auc[i]:0.2f})')
+
+    plt.plot([0, 1], [0, 1], 'k--', lw=2)
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title('ROC Curve for Each Emotion')
+    plt.legend(loc="lower right")
+    plt.savefig('roc_curves.png')
+    plt.show()
+
+    # Print AUC for each class
+    for i, label in emotion_dict.items():
+        print(f'{label}: AUC = {roc_auc[i]:0.4f}')

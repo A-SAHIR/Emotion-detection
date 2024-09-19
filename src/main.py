@@ -76,7 +76,7 @@ if mode == "train":
         validation_data=validation_generator,
         validation_steps=num_val // batch_size)
     
-    model.save_weights('model.h5')
+    model.save_weights('model.weights.h5')
 
     # Plot Accuracy and Loss Curves
     def plot_model_history(history):

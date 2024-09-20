@@ -2,8 +2,9 @@ import numpy as np
 import argparse
 import matplotlib.pyplot as plt
 import cv2
+from tensorflow.keras.applications import VGG16
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense, Dropout, Flatten, Conv2D, MaxPooling2D
+from tensorflow.keras.layers import Dense, Dropout, Flatten, Conv2D, MaxPooling2D, BatchNormalization, GlobalAveragePooling2D
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
 from sklearn.metrics import precision_score, confusion_matrix, roc_curve, auc
@@ -34,7 +35,7 @@ model.add(Conv2D(128, kernel_size=(3, 3), activation='relu'))
 model.add(MaxPooling2D(pool_size=(2, 2)))
 model.add(Dropout(0.25))
 model.add(Flatten())
-model.add(Dense(1024, activation='relu'))
+model.add(Dense(2048, activation='relu'))
 model.add(Dropout(0.5))
 model.add(Dense(7, activation='softmax'))  # 7 classes for emotions
 
@@ -48,7 +49,19 @@ if mode == "train":
     batch_size = 64
     num_epoch = 50
 
-    train_datagen = ImageDataGenerator(rescale=1./255)
+    # Data Augmentation for training
+    train_datagen = ImageDataGenerator(
+        rescale=1./255,
+        rotation_range=20,
+        width_shift_range=0.2,
+        height_shift_range=0.2,
+        shear_range=0.2,
+        zoom_range=0.2,
+        horizontal_flip=True,
+        fill_mode='nearest'
+    )
+    
+    # Validation data generator
     val_datagen = ImageDataGenerator(rescale=1./255)
 
     train_generator = train_datagen.flow_from_directory(
@@ -65,25 +78,53 @@ if mode == "train":
         color_mode="grayscale",
         class_mode='categorical')
 
+    # Update model to include Batch Normalization and dropout
+    model = Sequential()
+    model.add(Conv2D(32, kernel_size=(3, 3), activation='relu', input_shape=(48,48,1)))
+    model.add(BatchNormalization())  # Add Batch Normalization
+    model.add(Conv2D(64, kernel_size=(3, 3), activation='relu'))
+    model.add(BatchNormalization())  # Add Batch Normalization
+    model.add(MaxPooling2D(pool_size=(2, 2)))
+    model.add(Dropout(0.3))  # Dropout to prevent overfitting
+
+    model.add(Conv2D(128, kernel_size=(3, 3), activation='relu'))
+    model.add(BatchNormalization())  # Add Batch Normalization
+    model.add(MaxPooling2D(pool_size=(2, 2)))
+    model.add(Conv2D(128, kernel_size=(3, 3), activation='relu'))
+    model.add(BatchNormalization())  # Add Batch Normalization
+    model.add(MaxPooling2D(pool_size=(2, 2)))
+    model.add(Dropout(0.4))  # Increased dropout to 40%
+
+    model.add(Flatten())
+    model.add(Dense(1024, activation='relu'))
+    model.add(BatchNormalization())  # Add Batch Normalization
+    model.add(Dropout(0.5))  # Dropout after fully connected layer
+    model.add(Dense(7, activation='softmax'))  # 7 classes for emotions
+
     # Compile the model
-    model.compile(loss='categorical_crossentropy', optimizer=Adam(learning_rate=0.0001, epsilon=1e-6), metrics=['accuracy'])
-    
+    model.compile(loss='categorical_crossentropy', optimizer=Adam(learning_rate=0.00005), metrics=['accuracy'])  # Reduced learning rate
+
+    # Implement early stopping to stop training when validation loss stops improving
+    from tensorflow.keras.callbacks import EarlyStopping
+    early_stopping = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
+
     # Train the model and store the training history
     model_info = model.fit(
         train_generator,
         steps_per_epoch=num_train // batch_size,
         epochs=num_epoch,
         validation_data=validation_generator,
-        validation_steps=num_val // batch_size)
+        validation_steps=num_val // batch_size,
+        callbacks=[early_stopping]  # Early stopping callback
+    )
     
-    model.save_weights('model.weights.h5')
+    model.save_weights('model_with_batchnorm.weights.h5')
 
     # Plot Accuracy and Loss Curves
     def plot_model_history(history):
         """
         Plot training & validation accuracy and loss values
         """
-        # Create a figure for accuracy and loss plots
         plt.figure(figsize=(12, 4))
         
         # Plot accuracy
@@ -108,7 +149,7 @@ if mode == "train":
 
         # Adjust layout and save the plot
         plt.tight_layout()
-        plt.savefig('accuracy_loss_curves_all_emotions.png')
+        plt.savefig('accuracy_loss_curves_with_batchnorm.png')
         plt.show()
 
     # Call the function to plot accuracy and loss
